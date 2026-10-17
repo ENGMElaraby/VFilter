@@ -83,7 +83,8 @@ dotnet run --project src/VFilter.Host          # needs VFilter__ConnectionString
 - Heartbeat every 5 s into `filter_status`. Every DB timestamp uses the database clock (`SYSUTCDATETIME()`).
 - Read config only from `ConfigStore` snapshots; never query config tables elsewhere.
 - Commands run only after `ICommandRepository.TryClaimAsync` succeeded (pending → running), so a cancel and a claim never both win.
-- New traffic code implements `IModuleRunner` and reports sessions through `SessionRegistry` (never DB calls on the traffic path).
+- Traffic code lives in `VFilter.Core/Proxy`: new checks are `IPacketInspector`s (pass / replace / answer / close), never DB calls on the traffic path. Sessions go through `SessionRegistry`.
+- `VFilter.Security` is ported from the owner's MElarabyBot (written from jMerlin's public protocol notes). Never copy RSBot (AGPL) or openroad (GPL).
 - Hot paths don't allocate per packet (use pooled buffers).
 
 ## Git
