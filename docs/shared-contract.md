@@ -1,6 +1,6 @@
 # VFilter Shared Contract (Website ⇄ Filter)
 
-**Version:** 0.3.2 (draft) · **Owner:** both repos · **Last updated:** 2026-10-17
+**Version:** 0.3.3 (draft) · **Owner:** both repos · **Last updated:** 2026-10-17
 
 The website (VFilterWebsite, Laravel) and the filter (VFilter, C#) never talk to each other directly.
 They share **one SQL Server database, `VFILTER`**, that sits next to the game databases.
@@ -133,6 +133,12 @@ one `set_gateway_mode` at a time. `set_gateway_mode` payload: `{"mode":"gm"|"ins
 `{"session_id":123,"reason":"...","duration_minutes":1440}` (`null` = permanent). The filter bans the account
 and disconnects it. The website queues at most one pending/running kick/ban per target.
 
+**Filter behaviour.** The filter marks a command `failed` with result `expired` instead of running it when it
+claims it more than 10 minutes after `created_at` (database clock). `notice` is `failed: not supported yet` until
+the proxy can send notices; `ban` is `failed: account ban not supported yet` (after disconnecting the player) until
+the account-ban feature exists. `heartbeat_at`, `started_at`, `processed_at` and session times are written with the
+database clock (`SYSUTCDATETIME()`).
+
 Gateway modes: `gm` (only allowed IPs; others see "Check"), `inspection` (others get inspection
 error), `public`. The filter starts in `gm` unless `server.start_in_inspection` is true.
 
@@ -190,6 +196,7 @@ Their columns are defined by the website in `VFilterWebsite/specs/001-auth-and-s
 (the filter never reads them, so they are not repeated here).
 
 ## Changelog
+- 0.3.3 (2026-10-17, PATCH): command expiry, interim notice/ban results, database-clock timestamps (VFilter 001).
 - 0.3.2 (2026-10-17, PATCH): list names and formats (CIDR), `cafe_limit` rule (feature 005).
 - 0.3.1 (2026-10-17, PATCH): kick/ban payload shapes (feature 004).
 - 0.3.0 (2026-10-17, MINOR): `filter_commands.status` gains `cancelled` (website, only from
