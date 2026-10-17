@@ -5,6 +5,9 @@
     <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.13" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\VFilter.Security\VFilter.Security.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <InternalsVisibleTo Include="VFilter.Core.Tests" />
     <InternalsVisibleTo Include="VFilter.Data.Tests" />
   </ItemGroup>
