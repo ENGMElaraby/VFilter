@@ -29,6 +29,7 @@ public sealed class GatewayInspector(ConfigStore config, GatewayModeState gatewa
         {
             (PacketDirection.ClientToModule, Opcodes.GatewayLoginRequest) => OnLoginRequest(session, packet),
             (PacketDirection.ModuleToClient, Opcodes.GatewayLoginResponse) => OnLoginResponse(session, packet),
+            (PacketDirection.ModuleToClient, Opcodes.GatewayPatchResponse) => OnPatchResponse(packet),
             _ => Inspection.Pass(packet),
         };
     }
@@ -48,7 +49,8 @@ public sealed class GatewayInspector(ConfigStore config, GatewayModeState gatewa
             return Inspection.Close("security: malformed login request");
         }
 
-        session.Registry.Identify(session.Live, username, charname: null, hwid: null);
+        // Only a successful login answer confirms who this is (a client may claim any name here).
+        session.PendingUsername = username;
         var mode = gatewayMode.Mode;
 
         if (mode == GatewayMode.Public || IpMatcher.AnyContains(config.Lists.Get(AllowedIpsList).Select(e => e.Value), session.ClientAddress))
@@ -94,6 +96,11 @@ public sealed class GatewayInspector(ConfigStore config, GatewayModeState gatewa
                 return Inspection.Close("security: login answer names an unknown agent address");
             }
 
+            if (session.PendingUsername is { } username)
+            {
+                session.Registry.Identify(session.Live, username, charname: null, hwid: null);
+            }
+
             var rewritten = new PacketWriter();
             rewritten.WriteByte(Opcodes.LoginSucceeded);
             rewritten.WriteUInt32(token);
@@ -106,6 +113,46 @@ public sealed class GatewayInspector(ConfigStore config, GatewayModeState gatewa
         catch (EndOfPacketException)
         {
             return Inspection.Close("module protocol error: malformed login answer");
+        }
+    }
+
+    // "Patch available" answers name the Download server; send the client to its guard address instead.
+    private Inspection OnPatchResponse(Packet packet)
+    {
+        try
+        {
+            var reader = packet.OpenReader();
+
+            if (reader.ReadByte() != Opcodes.LoginFailed || reader.ReadByte() != Opcodes.PatchAvailable)
+            {
+                return Inspection.Pass(packet);
+            }
+
+            var ip = reader.ReadAscii();
+            var port = reader.ReadUInt16();
+            var rest = reader.ReadBytes(reader.Remaining);
+            var download = config.Modules.Modules.FirstOrDefault(m =>
+                m.Type == ModuleType.Download
+                && string.Equals(m.ModuleIp, ip, StringComparison.OrdinalIgnoreCase)
+                && m.ModulePort == port);
+
+            if (download is null)
+            {
+                return Inspection.Close("security: patch answer names an unknown download address");
+            }
+
+            var rewritten = new PacketWriter();
+            rewritten.WriteByte(Opcodes.LoginFailed);
+            rewritten.WriteByte(Opcodes.PatchAvailable);
+            rewritten.WriteAscii(download.GuardIp);
+            rewritten.WriteUInt16((ushort)download.GuardPort);
+            rewritten.WriteBytes(rest);
+
+            return Inspection.Replace(rewritten.ToPacket(packet.Opcode, packet.Encrypted, packet.Massive));
+        }
+        catch (EndOfPacketException)
+        {
+            return Inspection.Close("module protocol error: malformed patch answer");
         }
     }
 }

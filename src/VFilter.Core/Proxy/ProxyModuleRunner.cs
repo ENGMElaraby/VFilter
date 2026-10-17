@@ -26,9 +26,15 @@ public sealed partial class ProxyModuleRunner(
     private readonly ConcurrentDictionary<string, Listener> _listeners = new(StringComparer.OrdinalIgnoreCase);
     private readonly SecurityChecksum _checksum = SecurityChecksum.Build();
 
+    private static readonly TimeSpan AcceptRetryDelay = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan AcceptOutOfDescriptorsDelay = TimeSpan.FromSeconds(1);
+
     private sealed record Listener(ModuleConfig Config, Socket Socket, CancellationTokenSource Stop, ConcurrentDictionary<ProxySession, byte> Sessions)
     {
         public Task AcceptLoop { get; set; } = Task.CompletedTask;
+
+        /// <summary>Client handlers still running (including ones still connecting to the module).</summary>
+        public ConcurrentDictionary<Task, byte> Handlers { get; } = new();
     }
 
     /// <summary>The local endpoint a module listens on (tests bind port 0 and read the real port here).</summary>
@@ -54,7 +60,15 @@ public sealed partial class ProxyModuleRunner(
         }
 
         var listener = new Listener(config, socket, new CancellationTokenSource(), new ConcurrentDictionary<ProxySession, byte>());
-        _listeners[config.Name] = listener;
+
+        if (!_listeners.TryAdd(config.Name, listener))
+        {
+            socket.Dispose();
+            listener.Stop.Dispose();
+
+            throw new InvalidOperationException($"{config.Name} is already listening.");
+        }
+
         listener.AcceptLoop = Task.Run(() => AcceptLoopAsync(listener), CancellationToken.None);
         LogListening(config.Name, socket.LocalEndPoint);
 
@@ -79,6 +93,7 @@ public sealed partial class ProxyModuleRunner(
         }
 
         await listener.AcceptLoop.ConfigureAwait(false);
+        await Task.WhenAll(listener.Handlers.Keys).ConfigureAwait(false);
         listener.Stop.Dispose();
     }
 
@@ -114,12 +129,32 @@ public sealed partial class ProxyModuleRunner(
             {
                 client = await listener.Socket.AcceptAsync(token).ConfigureAwait(false);
             }
-            catch (Exception exception) when (exception is OperationCanceledException or ObjectDisposedException or SocketException)
+            catch (Exception exception) when (exception is OperationCanceledException or ObjectDisposedException)
             {
                 return;
             }
+            catch (SocketException exception)
+            {
+                // One failed accept (a client resetting mid-accept, or running out of descriptors) must not stop
+                // the module from accepting anyone else.
+                LogAcceptFailed(listener.Config.Name, exception.SocketErrorCode, exception);
+                var outOfDescriptors = exception.SocketErrorCode is SocketError.TooManyOpenSockets or SocketError.NoBufferSpaceAvailable;
 
-            _ = Task.Run(() => HandleClientAsync(listener, client, token), CancellationToken.None);
+                try
+                {
+                    await Task.Delay(outOfDescriptors ? AcceptOutOfDescriptorsDelay : AcceptRetryDelay, time, token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                continue;
+            }
+
+            var handler = Task.Run(() => HandleClientAsync(listener, client, token), CancellationToken.None);
+            listener.Handlers[handler] = 0;
+            _ = handler.ContinueWith(t => listener.Handlers.TryRemove(t, out _), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
     }
 
@@ -141,6 +176,11 @@ public sealed partial class ProxyModuleRunner(
         try
         {
             await session.RunAsync(token).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            LogSessionFailed(listener.Config.Name, exception);
+            await session.CloseAsync($"internal: {exception.Message}").ConfigureAwait(false);
         }
         finally
         {
@@ -188,6 +228,12 @@ public sealed partial class ProxyModuleRunner(
             ? (address.AddressFamily == AddressFamily.InterNetwork ? address.MapToIPv6() : address)
             : IPAddress.IPv6Any;
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "{Module} accept failed ({Error})")]
+    private partial void LogAcceptFailed(string module, SocketError error, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "{Module} session failed unexpectedly")]
+    private partial void LogSessionFailed(string module, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "{Module} listening on {Endpoint}")]
     private partial void LogListening(string module, EndPoint? endpoint);

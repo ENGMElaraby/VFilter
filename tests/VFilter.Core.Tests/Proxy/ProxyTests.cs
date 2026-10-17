@@ -39,19 +39,34 @@ public sealed class ProxyTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _gateway = new FakeModule(Checksum, packet => packet.Opcode == Opcodes.GatewayLoginRequest ? [LoginAnswer("127.0.0.1", (ushort)AgentPort)] : []);
-        _agent = new FakeModule(Checksum, packet => packet.Opcode == 0x7777 ? [new Packet(0x7778, packet.Payload, packet.Encrypted)] : []);
+        _gateway = new FakeModule(Checksum, packet => packet.Opcode switch
+        {
+            Opcodes.GatewayLoginRequest => [LoginAnswer("127.0.0.1", (ushort)AgentPort)],
+            0x6100 => [PatchAnswer("127.0.0.1", (ushort)((IPEndPoint)_silentModule.LocalEndpoint).Port)],
+            _ => [],
+        });
+        _agent = new FakeModule(Checksum, packet => packet.Opcode switch
+        {
+            0x7777 => [new Packet(0x7778, packet.Payload, packet.Encrypted)],
+            Opcodes.AgentAuthRequest => [new Packet(Opcodes.AgentAuthResponse, [Opcodes.LoginSucceeded])],
+            Opcodes.LobbySelectCharacter => [new Packet(Opcodes.LobbySelectCharacterResponse, [Opcodes.LoginSucceeded])],
+            _ => [],
+        });
+        _silentModule = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        _silentModule.Start();
         _cleanup.AddRange([_gateway, _agent]);
 
         _repository.Modules.Clear();
         _repository.Modules.Add(new ModuleRow(1, "gateway", "Gateway", "127.0.0.1", _gateway.Port, "127.0.0.1", 0, true));
         _repository.Modules.Add(new ModuleRow(3, "agent", "Agent1", "127.0.0.1", _agent.Port, "203.0.113.7", 0, true));
+        // Download points at a module that accepts but never starts its handshake.
+        _repository.Modules.Add(new ModuleRow(2, "download", "Download", "127.0.0.1", ((IPEndPoint)_silentModule.LocalEndpoint).Port, "198.51.100.5", 0, true));
         Config = new ConfigStore(_repository, NullLogger<ConfigStore>.Instance);
         await Config.RefreshAsync(force: false, CancellationToken.None);
         Mode.Set(GatewayMode.Public);
 
         Runner = new ProxyModuleRunner(
-            [new GatewayInspector(Config, Mode), new AgentInspector()],
+            [_rewriter, _recorder, new GatewayInspector(Config, Mode), new AgentInspector()],
             Sessions,
             Log,
             Options.Create(new ProxyOptions { HandshakeTimeout = TimeSpan.FromSeconds(2) }),
@@ -64,6 +79,7 @@ public sealed class ProxyTests : IAsyncLifetime
     public async Task DisposeAsync()
     {
         await Runner.DisposeAsync();
+        _silentModule.Stop();
 
         foreach (var item in _cleanup)
         {
@@ -75,6 +91,35 @@ public sealed class ProxyTests : IAsyncLifetime
     }
 
     private int AgentPort => _agent.Port;
+
+    private readonly ReplacingInspector _rewriter = new();
+    private readonly RecordingInspector _recorder = new();
+    private System.Net.Sockets.TcpListener _silentModule = null!;
+
+    private sealed class ReplacingInspector : IPacketInspector
+    {
+        public bool AppliesTo(ModuleType type) => true;
+
+        public Inspection Inspect(ProxySession session, PacketDirection direction, Packet packet) =>
+            packet.Opcode == 0x7777 ? Inspection.Replace(packet with { Payload = [9] }) : Inspection.Pass(packet);
+    }
+
+    private sealed class RecordingInspector : IPacketInspector
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<byte[]> Seen { get; } = new();
+
+        public bool AppliesTo(ModuleType type) => true;
+
+        public Inspection Inspect(ProxySession session, PacketDirection direction, Packet packet)
+        {
+            if (packet.Opcode == 0x7777)
+            {
+                Seen.Enqueue(packet.Payload);
+            }
+
+            return Inspection.Pass(packet);
+        }
+    }
 
     [Fact]
     public async Task Forwards_plain_encrypted_and_massive_packets_both_ways()
@@ -214,7 +259,11 @@ public sealed class ProxyTests : IAsyncLifetime
         await forger.WaitDisconnectedAsync();
         await good.SendAsync(new Packet(0x7777, [5]));
 
-        Assert.Equal(0x7777, (await goodModule.ReceiveAsync()).Opcode);
+        var received = await goodModule.ReceiveAsync();
+        Assert.Equal(0x7777, received.Opcode);
+        // Inspectors run as a chain: the second one saw what the first one replaced.
+        Assert.Equal(new byte[] { 9 }, received.Payload);
+        Assert.Equal(new byte[] { 9 }, Assert.Single(_recorder.Seen));
         Assert.Equal(0x7778, (await good.ReceiveAsync()).Opcode);
         Assert.Contains(Log.Take(100), e => e.Level == FilterLogLevel.Security);
     }
@@ -273,6 +322,68 @@ public sealed class ProxyTests : IAsyncLifetime
         Assert.Equal(ModuleState.Running, statuses["Gateway"].State);
     }
 
+    [Fact]
+    public async Task Sends_patching_clients_to_the_download_guard_address()
+    {
+        await using var client = await ConnectAsync("Gateway");
+        await client.WaitForHandshakeAsync();
+
+        var request = new PacketWriter();
+        request.WriteByte(22);
+        request.WriteAscii("SR_Client");
+        request.WriteUInt32(187);
+        await client.SendAsync(request.ToPacket(0x6100));
+        var answer = (await client.ReceiveAsync()).OpenReader();
+
+        Assert.Equal((Opcodes.LoginFailed, Opcodes.PatchAvailable), (answer.ReadByte(), answer.ReadByte()));
+        Assert.Equal("198.51.100.5", answer.ReadAscii());
+        Assert.Equal(0, answer.ReadUInt16());
+        Assert.Equal(188u, answer.ReadUInt32());
+    }
+
+    [Fact]
+    public async Task Names_only_what_the_server_confirmed()
+    {
+        await using var client = await ConnectAsync("Gateway");
+        await client.WaitForHandshakeAsync();
+        _repository.Modules[1] = _repository.Modules[1] with { ModuleIp = "10.1.1.1" };
+        _repository.Versions[ConfigArea.Modules] = 9;
+        await Config.RefreshAsync(false, CancellationToken.None);
+        Mode.Set(GatewayMode.Gm);
+
+        // Refused in GM mode: the claimed name is never recorded.
+        await client.SendAsync(LoginRequest("admin"));
+        await client.ReceiveAsync();
+
+        Assert.Equal(0, Sessions.Kick("admin", "test"));
+    }
+
+    [Fact]
+    public async Task Closes_a_session_whose_module_never_starts_its_handshake()
+    {
+        await using var client = await ConnectAsync("Download");
+
+        await client.WaitDisconnectedAsync();
+        Assert.Contains(Log.Take(100), e => e.Message.Contains("module handshake not completed in time", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_kick_racing_a_disconnect_leaves_no_session_behind()
+    {
+        for (var i = 0; i < 20; i++)
+        {
+            var client = await ConnectAsync("Agent1");
+            await client.WaitForHandshakeAsync();
+            await Peer.WaitUntilAsync(() => Sessions.Count == 1);
+
+            var kick = Task.Run(() => Sessions.Kick("127.0.0.1", "race"));
+            var leave = client.DisposeAsync().AsTask();
+            await Task.WhenAll(kick, leave);
+
+            await Peer.WaitUntilAsync(() => Sessions.Count == 0 && Runner.GetCounts("Agent1") == default(ModuleCounts));
+        }
+    }
+
     private async Task<Peer> ConnectAsync(string module)
     {
         var peer = await Peer.ConnectClientAsync(Runner.ListeningEndpoint(module)!, Checksum);
@@ -290,6 +401,19 @@ public sealed class ProxyTests : IAsyncLifetime
         writer.WriteUInt16(64);
 
         return writer.ToPacket(Opcodes.GatewayLoginRequest, encrypted: true);
+    }
+
+    private static Packet PatchAnswer(string downloadIp, ushort downloadPort)
+    {
+        var writer = new PacketWriter();
+        writer.WriteByte(Opcodes.LoginFailed);
+        writer.WriteByte(Opcodes.PatchAvailable);
+        writer.WriteAscii(downloadIp);
+        writer.WriteUInt16(downloadPort);
+        writer.WriteUInt32(188);
+        writer.WriteByte(0);
+
+        return writer.ToPacket(Opcodes.GatewayPatchResponse, massive: true);
     }
 
     private static Packet LoginAnswer(string agentIp, ushort agentPort)

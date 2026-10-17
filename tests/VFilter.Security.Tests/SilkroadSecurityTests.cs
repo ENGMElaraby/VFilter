@@ -270,3 +270,62 @@ public sealed class SilkroadSecurityTests
         }
     }
 }
+
+public sealed class MassiveLimitTests
+{
+    private static readonly SecurityChecksum Checksum = SecurityChecksum.Build();
+
+    private static (SilkroadSecurity Server, SilkroadSecurity Client) Connected()
+    {
+        var server = SilkroadSecurity.CreateServer(SecurityFlags.Standard, Checksum);
+        var client = SilkroadSecurity.CreateClient(Checksum);
+
+        for (var i = 0; i < 4 && !(server.IsHandshakeComplete && client.IsHandshakeComplete); i++)
+        {
+            client.Receive(server.TakeOutgoing());
+            server.Receive(client.TakeOutgoing());
+        }
+
+        Assert.True(server.IsHandshakeComplete && client.IsHandshakeComplete);
+
+        return (server, client);
+    }
+
+    [Fact]
+    public void A_server_refuses_a_massive_packet_before_the_handshake()
+    {
+        var server = SilkroadSecurity.CreateServer(SecurityFlags.Blowfish | SecurityFlags.Handshake);
+        // [size=5][0x600D][count][crc] [header=1][parts=65535][opcode=0x3013]
+        byte[] frame = [5, 0, 0x0D, 0x60, 0, 0, 1, 0xFF, 0xFF, 0x13, 0x30];
+
+        Assert.Throws<PacketSecurityException>(() => server.Receive(frame));
+    }
+
+    [Fact]
+    public void A_server_refuses_client_massive_packets_over_the_limit()
+    {
+        var (server, client) = Connected();
+        client.Send(new Packet(0x7001, new byte[SilkroadSecurity.MaxClientMassiveBytes + 1], Massive: true));
+
+        Assert.Throws<PacketSecurityException>(() => server.Receive(client.TakeOutgoing()));
+    }
+
+    [Fact]
+    public void A_massive_packet_may_not_carry_a_handshake_opcode()
+    {
+        var (server, client) = Connected();
+        client.Send(new Packet(0x600D, [1, 2, 3], Massive: true));
+
+        Assert.Throws<PacketSecurityException>(() => server.Receive(client.TakeOutgoing()));
+    }
+
+    [Fact]
+    public void Counts_bytes_held_until_the_handshake()
+    {
+        var client = SilkroadSecurity.CreateClient(Checksum);
+        client.Send(new Packet(0x7001, new byte[100]));
+        client.Send(new Packet(0x7002, new byte[50]));
+
+        Assert.Equal(150, client.PendingBytes);
+    }
+}

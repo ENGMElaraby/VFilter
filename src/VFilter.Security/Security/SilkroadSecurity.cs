@@ -22,6 +22,15 @@ public sealed class SilkroadSecurity
     public const int MassiveChunkSize = 4089;
 
     public const int MaxPayload = 0x7FFF;
+
+    /// <summary>
+    /// Largest reassembled massive packet accepted from a game client (server role). Clients only send small
+    /// massive groups; without a cap an unauthenticated peer could grow memory without bound (VFilter review).
+    /// </summary>
+    public const int MaxClientMassiveBytes = 1024 * 1024;
+
+    /// <summary>Largest reassembled massive packet accepted from a real server (client role).</summary>
+    public const int MaxServerMassiveBytes = 16 * 1024 * 1024;
     private const ushort EncryptedFlag = 0x8000;
 
     private readonly object _gate = new();
@@ -47,6 +56,8 @@ public sealed class SilkroadSecurity
     private bool _awaitingServerChallenge;
     private bool _awaitingClientResponse;
     private bool _awaitingAccept;
+
+    private long _pendingBytes;
 
     // Massive (0x600D) reassembly.
     private ushort _massiveOpcode;
@@ -144,6 +155,19 @@ public sealed class SilkroadSecurity
         lock (_gate)
         {
             _outgoing.Enqueue(packet);
+            _pendingBytes += packet.Payload.Length;
+        }
+    }
+
+    /// <summary>Payload bytes queued but not yet taken (including packets held until the handshake completes).</summary>
+    public long PendingBytes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _pendingBytes;
+            }
         }
     }
 
@@ -172,6 +196,7 @@ public sealed class SilkroadSecurity
             while (IsHandshakeComplete && _outgoing.Count > 0)
             {
                 var packet = _outgoing.Dequeue();
+                _pendingBytes -= packet.Payload.Length;
                 if (packet.Massive)
                 {
                     WriteMassive(wire, packet);
@@ -452,6 +477,8 @@ public sealed class SilkroadSecurity
             case SecurityOpcodes.HandshakeAccept when Role == SecurityRole.Server:
                 OnClientAccept();
                 break;
+            case SecurityOpcodes.Massive when Role == SecurityRole.Server && !IsHandshakeComplete:
+                throw new PacketSecurityException("The client sent a massive packet before finishing the handshake.");
             case SecurityOpcodes.Massive:
                 OnMassivePart(packet, applicationPackets);
                 break;
@@ -474,6 +501,11 @@ public sealed class SilkroadSecurity
         {
             _massiveRemaining = reader.ReadUInt16();
             _massiveOpcode = reader.ReadUInt16();
+            if (_massiveOpcode is SecurityOpcodes.Handshake or SecurityOpcodes.HandshakeAccept or SecurityOpcodes.Massive)
+            {
+                throw new PacketSecurityException($"A massive packet may not carry 0x{_massiveOpcode:X4}.");
+            }
+
             _massiveData = new MemoryStream();
             if (_massiveRemaining == 0)
             {
@@ -486,6 +518,12 @@ public sealed class SilkroadSecurity
         if (_massiveData is null)
         {
             throw new PacketSecurityException("A massive packet part arrived without its header.");
+        }
+
+        var limit = Role == SecurityRole.Server ? MaxClientMassiveBytes : MaxServerMassiveBytes;
+        if (_massiveData.Length + reader.Remaining > limit)
+        {
+            throw new PacketSecurityException($"A massive packet exceeds {limit} bytes.");
         }
 
         _massiveData.Write(reader.ReadBytes(reader.Remaining));

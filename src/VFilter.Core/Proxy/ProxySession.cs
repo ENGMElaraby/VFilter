@@ -28,6 +28,8 @@ public sealed class ProxySession : IAsyncDisposable
     private readonly SemaphoreSlim _clientWrite = new(1, 1);
     private readonly SemaphoreSlim _moduleWrite = new(1, 1);
     private readonly CancellationTokenSource _cancellation = new();
+    private readonly Lock _closeGate = new();
+    private Task? _closing;
     private long _lastClientActivity;
     private int _closed;
 
@@ -72,6 +74,12 @@ public sealed class ProxySession : IAsyncDisposable
     /// <summary>Why the session ended (null while open or for an ordinary disconnect).</summary>
     public string? CloseReason { get; private set; }
 
+    /// <summary>Username the client asked to log in with; confirmed only by the server's success answer.</summary>
+    public string? PendingUsername { get; set; }
+
+    /// <summary>Character the client selected; confirmed only by the server's success answer.</summary>
+    public string? PendingCharname { get; set; }
+
     /// <summary>Raised once when the session has closed.</summary>
     public event Action<ProxySession>? Closed;
 
@@ -97,16 +105,23 @@ public sealed class ProxySession : IAsyncDisposable
         }
     }
 
-    /// <summary>Closes both sockets (idempotent). A non-null reason is logged.</summary>
-    public async Task CloseAsync(string? reason)
+    /// <summary>
+    /// Closes both sockets. Every caller (pumps, kick, stop, dispose) shares one close task, so a kick racing a
+    /// disconnect can never leave half a session behind. A non-null reason is logged.
+    /// </summary>
+    public Task CloseAsync(string? reason)
     {
-        if (Interlocked.Exchange(ref _closed, 1) == 1)
+        lock (_closeGate)
         {
-            return;
+            return _closing ??= Task.Run(() => CloseCore(reason));
         }
+    }
 
+    private void CloseCore(string? reason)
+    {
+        Volatile.Write(ref _closed, 1);
         CloseReason = reason;
-        await _cancellation.CancelAsync().ConfigureAwait(false);
+        _cancellation.Cancel();
         _client.Dispose();
         _module.Dispose();
         Registry.Close(Live);
@@ -139,7 +154,8 @@ public sealed class ProxySession : IAsyncDisposable
         _moduleWrite.Dispose();
     }
 
-    // Returns why the pump ended: null for an ordinary disconnect.
+    // Returns why the pump ended: null for an ordinary disconnect. Never throws: anything unexpected that a
+    // client can trigger ends only this session, with a log entry.
     private async Task<string?> PumpAsync(Socket from, SilkroadSecurity security, PacketDirection direction, CancellationToken token)
     {
         var buffer = new byte[BufferSize];
@@ -185,6 +201,12 @@ public sealed class ProxySession : IAsyncDisposable
         {
             return null;
         }
+        catch (Exception exception)
+        {
+            return direction == PacketDirection.ClientToModule
+                ? $"security: unexpected client packet ({exception.GetType().Name}: {exception.Message})"
+                : $"internal: {exception.GetType().Name}: {exception.Message}";
+        }
     }
 
     private string? Forward(IReadOnlyList<Packet> packets, PacketDirection direction)
@@ -214,19 +236,32 @@ public sealed class ProxySession : IAsyncDisposable
         return null;
     }
 
+    // Every inspector sees the packet as the previous one left it, so a later check (e.g. the gateway mode gate
+    // or the address rewrite) is never skipped because an earlier inspector changed the packet.
     private Inspection Inspect(PacketDirection direction, Packet packet)
     {
+        Packet? current = packet;
+        var replies = new List<Packet>();
+
         foreach (var inspector in _inspectors)
         {
-            var result = inspector.Inspect(this, direction, packet);
+            var result = inspector.Inspect(this, direction, current);
+            replies.AddRange(result.ReplyToClient);
 
-            if (!ReferenceEquals(result.Forward, packet) || result.ReplyToClient.Count > 0 || result.CloseReason is not null)
+            if (result.CloseReason is not null)
             {
-                return result;
+                return Inspection.Close(result.CloseReason);
+            }
+
+            current = result.Forward;
+
+            if (current is null)
+            {
+                break;
             }
         }
 
-        return Inspection.Pass(packet);
+        return new Inspection(current, replies, null);
     }
 
     private async Task<string?> WatchAsync(CancellationToken token)
@@ -239,6 +274,12 @@ public sealed class ProxySession : IAsyncDisposable
             if (!_clientSide.IsHandshakeComplete && _time.GetElapsedTime(started) > _options.HandshakeTimeout)
             {
                 return "security: handshake not completed in time";
+            }
+
+            // A module that never completes its handshake would otherwise let client packets pile up unsent.
+            if (!_moduleSide.IsHandshakeComplete && _time.GetElapsedTime(started) > _options.HandshakeTimeout)
+            {
+                return "module handshake not completed in time";
             }
 
             if (_time.GetElapsedTime(Interlocked.Read(ref _lastClientActivity)) > _options.IdleTimeout)
@@ -258,14 +299,15 @@ public sealed class ProxySession : IAsyncDisposable
 
         try
         {
-            var writes = security.TakeOutgoingWrites();
-
-            if (writes.Sum(w => (long)w.Length) > _options.MaxPendingBytes)
+            // Counts packets still held for the handshake too, so nothing can pile up unbounded.
+            if (security.PendingBytes > _options.MaxPendingBytes)
             {
                 _ = CloseAsync("output buffer limit exceeded");
 
                 return;
             }
+
+            var writes = security.TakeOutgoingWrites();
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
             timeout.CancelAfter(_options.WriteTimeout);

@@ -3,7 +3,11 @@ using VFilter.Security;
 
 namespace VFilter.Core.Proxy;
 
-/// <summary>Who is on an Agent session (spec 002 US3): username from 0x6103, character from 0x7001.</summary>
+/// <summary>
+/// Who is on an Agent session (spec 002 US3). The client's requests (0x6103 username, 0x7001 character) are only
+/// remembered; the registry is updated when the Agent's answer (0xA103, 0xB001) reports success, so a client cannot
+/// label its session with someone else's name.
+/// </summary>
 public sealed class AgentInspector : IPacketInspector
 {
     public bool AppliesTo(ModuleType type) => type == ModuleType.Agent;
@@ -13,22 +17,23 @@ public sealed class AgentInspector : IPacketInspector
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(packet);
 
-        if (direction != PacketDirection.ClientToModule)
-        {
-            return Inspection.Pass(packet);
-        }
-
         try
         {
-            switch (packet.Opcode)
+            switch (direction, packet.Opcode)
             {
-                case Opcodes.AgentAuthRequest:
+                case (PacketDirection.ClientToModule, Opcodes.AgentAuthRequest):
                     var auth = packet.OpenReader();
                     auth.ReadUInt32();
-                    session.Registry.Identify(session.Live, auth.ReadAscii(), charname: null, hwid: null);
+                    session.PendingUsername = auth.ReadAscii();
                     break;
-                case Opcodes.LobbySelectCharacter:
-                    session.Registry.Identify(session.Live, username: null, charname: packet.OpenReader().ReadAscii(), hwid: null);
+                case (PacketDirection.ClientToModule, Opcodes.LobbySelectCharacter):
+                    session.PendingCharname = packet.OpenReader().ReadAscii();
+                    break;
+                case (PacketDirection.ModuleToClient, Opcodes.AgentAuthResponse) when Succeeded(packet):
+                    session.Registry.Identify(session.Live, session.PendingUsername, charname: null, hwid: null);
+                    break;
+                case (PacketDirection.ModuleToClient, Opcodes.LobbySelectCharacterResponse) when Succeeded(packet):
+                    session.Registry.Identify(session.Live, username: null, charname: session.PendingCharname, hwid: null);
                     break;
                 default:
                     break;
@@ -36,9 +41,13 @@ public sealed class AgentInspector : IPacketInspector
         }
         catch (EndOfPacketException)
         {
-            return Inspection.Close("security: malformed identity packet");
+            return direction == PacketDirection.ClientToModule
+                ? Inspection.Close("security: malformed identity packet")
+                : Inspection.Pass(packet);
         }
 
         return Inspection.Pass(packet);
     }
+
+    private static bool Succeeded(Packet packet) => packet.Payload.Length > 0 && packet.Payload[0] == Opcodes.LoginSucceeded;
 }
