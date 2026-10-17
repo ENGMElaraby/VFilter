@@ -48,7 +48,7 @@ dotnet build && git add -A && git commit -m "Scaffold solution" && git push -u o
 ```
 **002-control-and-telemetry**
 ```
-/speckit-specify Connect the filter to the VFILTER DB per docs/shared-contract.md: config cache with per-area filter_config_version polling (2s, reload only changed areas), filter_commands processing (start/stop/restart/set_gateway_mode/reload/kick/notice/ban), filter_status heartbeat every 5s, filter_sessions, and batched filter_logs. Gateway modes gm/inspection/public. Keeps running on last good config if the DB is down.
+/speckit-specify Connect the filter to the VFILTER DB per docs/shared-contract.md: config cache with per-area filter_config_version polling (2s, reload only changed areas), filter_commands processing (start/stop/restart/set_gateway_mode/reload/kick/notice/ban; claim each with UPDATE ... WHERE status='pending' and skip cancelled rows, contract 0.3.0), filter_status heartbeat every 5s, filter_sessions, and batched filter_logs. Gateway modes gm/inspection/public. Keeps running on last good config if the DB is down.
 ```
 **003-security**
 ```

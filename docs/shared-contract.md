@@ -1,6 +1,6 @@
 # VFilter Shared Contract (Website ⇄ Filter)
 
-**Version:** 0.2.0 (draft) · **Owner:** both repos · **Last updated:** 2026-10-17
+**Version:** 0.3.0 (draft) · **Owner:** both repos · **Last updated:** 2026-10-17
 
 The website (VFilterWebsite, Laravel) and the filter (VFilter, C#) never talk to each other directly.
 They share **one SQL Server database, `VFILTER`**, that sits next to the game databases.
@@ -25,7 +25,9 @@ table/column/setting, PATCH = wording).
 
 1. The website owns the schema. Migrations live in VFilterWebsite (`database/migrations`, connection `filter`).
 2. The filter never alters schema. It only reads config tables and writes to `filter_status`,
-   `filter_logs`, `filter_sessions`, and `filter_commands.status/result`.
+   `filter_logs`, `filter_sessions`, and `filter_commands.status/result/processed_at`. The website
+   writes new `filter_commands` rows, and may change a command's `status` only from `pending` to
+   `cancelled` (with `result` and `processed_at`).
 3. All times are stored in UTC (`datetime2(3)`). Text columns are `nvarchar` (Unicode). No foreign keys.
 4. Config changes are picked up via `filter_config_version`, one row per configuration area
    (`settings`, `lists`, `area_rules`, `cooldowns`, `modules`, `ga_permissions`). The website
@@ -101,14 +103,21 @@ Indexes: `(rule, enabled)`, `(area)`.
 | --- | --- | --- | --- |
 | id | bigint identity PK | no | |
 | command | nvarchar(32) | no | | `start`, `stop`, `restart`, `set_gateway_mode`, `reload`, `kick`, `notice`, `ban` |
-| target | nvarchar(64) | no | | `all`, `gateway`, `agent1`…, or username/charname |
+| target | nvarchar(64) | no | | `all`, `gateway`, `download`, `agent1`…`agent5` (lower-case module name), or username/charname |
 | payload | nvarchar(max) | yes | | JSON |
-| status | nvarchar(16) | no | `pending` | `pending` → `running` → `done` \| `failed` |
+| status | nvarchar(16) | no | `pending` | `pending` → `running` → `done` \| `failed`; or `pending` → `cancelled` (website) |
 | result | nvarchar(max) | yes | |
 | created_by | int | no | | panel user id |
 | created_at | datetime2(3) | no | |
 | processed_at | datetime2(3) | yes | |
 Indexes: `(status, created_at)`. (`target` widened 32 → 64 so character names fit.)
+
+**Claiming and cancelling.** The filter claims a command with a conditional update
+(`UPDATE … SET status='running' WHERE id=@id AND status='pending'`) and runs it only if one row
+changed. The website cancels with the mirror statement (`… SET status='cancelled' … AND
+status='pending'`), so a command is either run or cancelled, never both. The filter ignores
+`cancelled` rows. The website queues at most one pending/running `start`/`stop`/`restart` per target and
+one `set_gateway_mode` at a time. `set_gateway_mode` payload: `{"mode":"gm"|"inspection"|"public"}`.
 
 Gateway modes: `gm` (only allowed IPs; others see "Check"), `inspection` (others get inspection
 error), `public`. The filter starts in `gm` unless `server.start_in_inspection` is true.
@@ -167,6 +176,9 @@ Their columns are defined by the website in `VFilterWebsite/specs/001-auth-and-s
 (the filter never reads them, so they are not repeated here).
 
 ## Changelog
+- 0.3.0 (2026-10-17, MINOR): `filter_commands.status` gains `cancelled` (website, only from
+  `pending`); claim/cancel rule; `download` listed as a target; `set_gateway_mode` payload shape
+  (feature 003).
 - 0.2.0 (2026-10-17, MINOR): change counter per configuration area; exact types, nullability,
   defaults and indexes for every table; `nvarchar` everywhere; `filter_commands.target` → nvarchar(64)
   (feature 002).
