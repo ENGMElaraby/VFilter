@@ -1,7 +1,8 @@
 # HANDOFF: VFilter (proxy filter)
 
-**Date:** 2026-10-17 · **Status:** Feature **001-control-and-telemetry is built** (branch `001-control-and-telemetry`).
-The filter is now linked to the website through the VFILTER database. Next: `002-proxy-core`.
+**Date:** 2026-10-17 · **Status:** **001-control-and-telemetry** and **002-proxy-core are built** (branches
+`001-control-and-telemetry`, `002-proxy-core` stacked on it). The filter is a working Silkroad proxy, controlled by the
+website. Next: confirm on the real server (see "Manual test"), then `003-security`.
 
 ## What exists
 | Path | What |
@@ -10,6 +11,8 @@ The filter is now linked to the website through the VFILTER database. Next: `002
 | `src/VFilter.Host/` | Worker / Windows Service entry point (`dotnet run --project src/VFilter.Host`) |
 | `src/VFilter.Core/` | Config cache, module controller, gateway mode, command processor, heartbeat, sessions, log buffer |
 | `src/VFilter.Data/` | SQL Server repositories (Dapper, SqlBulkCopy) |
+| `src/VFilter.Security/` | Silkroad packet security (handshake, Blowfish, count/CRC, massive), ported from the owner's MElarabyBot |
+| `src/VFilter.Core/Proxy/` | Guard listeners, ProxySession (client ⇄ module), Gateway/Agent inspectors |
 | `tests/VFilter.Core.Tests/` | Unit tests with in-memory fakes |
 | `tests/VFilter.Data.Tests/` | SQL Server integration tests (`contract-schema.sql`), skipped without `VFILTER_TEST_CONNECTION` |
 | `docs/shared-contract.md` | VFILTER DB contract 0.3.3. **Must stay identical to the website's copy.** |
@@ -29,7 +32,24 @@ The filter is now linked to the website through the VFILTER database. Next: `002
 - **Sessions** are mirrored to `filter_sessions`, and leftovers are cleared at start.
 - **Logs** go to `filter_logs` in batches (1 s / 500), with a 50k buffer that drops low levels first.
 
-Until 002, modules run on `StandbyModuleRunner`: they show Running, but **no ports are opened and no traffic flows yet**.
+## What the proxy does (002)
+- **Guard listeners**: each enabled module listens on its guard port. It binds the guard IP when that IP is on this machine, otherwise all interfaces.
+- **Per client**: the filter connects to the real module and terminates Silkroad security on both sides. It forwards every packet in order, keeping each packet's encrypted flag. Massive packets are reassembled and split again.
+- **Gateway login (0x6102)**: the gateway mode is applied.
+  - GM and Inspection: only Allowed GM IPs (single IPs or ranges) are forwarded. Everyone else gets `0xA102 [2][code]` straight from the filter.
+  - The codes come from the settings `gateway.gm_refusal_code` and `gateway.inspection_refusal_code` (default 6). **Check with the real client which code shows the right message.**
+- **Login answer (0xA102 success)**: the Agent IP/port is rewritten to that Agent's guard IP/port. An unknown address closes the session, so real addresses never leak.
+- **Sessions**: username from 0x6102/0x6103, character from 0x7001. Counts are connections, plus players with a character on Agents. Kick closes both sides.
+- **Limits**:
+  - Bad count/CRC, decrypt failure or oversize frame: the session closes (security log).
+  - Handshake timeout 10 s, idle timeout 5 min, write timeout 30 s, output limit 4 MB.
+- **Measured latency** (200 sessions, all in one process on a Mac): about +2.4 ms p50 / +5.4 ms p99 per round trip (two proxy passes). That is **above the 1 ms per-pass target**. Profile and pool buffers in 003.
+
+## Manual test on the real server (needed: SC-001)
+1. In the website's Modules page set each module's real IP/port (where the SRO server listens) and a guard IP/port (what players use; must differ from the real port if on the same machine). Enable them.
+2. Run the filter on the server machine (`VFilter.exe`, or install as a Windows Service), with `VFilter__ConnectionString` pointing at VFILTER.
+3. Point a client's gateway (Media.pk2 DIVISIONINFO/GATEWAY) at the Gateway guard IP and port. Log in, pick a character, play.
+4. Try GM mode from a non-allowed IP and note which refusal message the client shows. Set the two `gateway.*_refusal_code` settings if needed.
 
 ## Run it locally
 ```bash
@@ -42,14 +62,9 @@ VFilter__ConnectionString="Server=127.0.0.1,14333;Database=VFILTER_E2E;User Id=s
 ```
 Stop it with Ctrl+C or SIGTERM to the `VFilter` process. `dotnet run` in the background does not forward signals.
 
-## Inputs needed before 002-proxy-core
-1. Server files version (vSRO 1.188?) and the real IP/port of the Gateway, Download and each Agent.
-2. Machine layout: does the filter run on the same Windows box as the modules?
-3. A packet capture or two (optional but very useful) for test fixtures.
 
 ## Next features
-**002-proxy-core**
-```
-/speckit-specify Proxy core for vSRO 1.188 implementing IModuleRunner: listen on guard IP/port per enabled module; Silkroad security handshake, Blowfish and packet framing in VFilter.Security; forward packets both ways; rewrite the Gateway login/agent-redirect response to our guard IP/port; register sessions in SessionRegistry (username/charname on login) and honour kick; per-module connection/online counts; gateway modes gm/inspection/public at login. Success = a real client logs in and plays through the filter.
-```
-**003-security** and **004-rules-engine** follow, as before: deny-by-default packet validation, lists/limits, and area rules. They use the config snapshots already loaded by 001.
+**003-security** (next): deny-by-default opcode whitelists per module and direction, size checks, known exploit blocks,
+flood/rate limits, blocked IPs/HWIDs (CIDR), IP/PC/cafe limits, GM login security. All as `IPacketInspector`s on the 002 pipeline, using
+the 001 config snapshots. Include the latency work (pooled buffers) here.
+**004-rules-engine** follows: area rules and cooldowns.
