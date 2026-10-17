@@ -1,0 +1,9 @@
+bin/
+obj/
+*.user
+.vs/
+.idea/
+TestResults/
+appsettings.*.local.json
+logs/
+.DS_Store
