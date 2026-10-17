@@ -60,3 +60,5 @@ dotnet build && git add -A && git commit -m "Scaffold solution" && git push -u o
 ```
 Later: triggers (SQL procs), the client DLL and its custom-window protocol (daily reward, lucky
 spin, battle pass, macro), and the GameServer-side features.
+After the client DLL: **Silk Stall** (stalls priced in silk), planned in `docs/features/silk-stall.md`
+with a draft `/speckit-specify` prompt.

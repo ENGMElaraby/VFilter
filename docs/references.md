@@ -27,6 +27,10 @@ read-only: learn from them, write our own code.
 - `rustyroad` (Rust, 2022), `sro-kot` (Kotlin, 2022): early experiments, superseded by openroad.
 - Everything else there (Advent of Code, timey, uml-editor, uni projects) is unrelated to SRO.
 
+## Feature sources (forum releases)
+- Silk Stall, elitepvpers, `bimbum*`, 2022-11: https://www.elitepvpers.com/forum/sro-pserver-guides-releases/5087904-release-silk-stall.html
+  (Cloudflare-protected; no license, read-only). Our plan: `docs/features/silk-stall.md`.
+
 ## Caveats
 - Everything above targets **vSRO 1.188**. Confirm our server's client version before trusting a
   packet layout.
