@@ -9,9 +9,10 @@ the shared `VFILTER` SQL Server database.
 - `HANDOFF.md`: current state, decisions, and what to do next.
 - `docs/shared-contract.md`: the database contract with the website. **Never change it in only one repo.**
 - `docs/maxiguard-feature-map.md`: every MaxiGuard feature we're matching.
+- `docs/references.md`: outside repos (protocol docs, servers, clients, PK2 tools), ranked, with licenses.
 - `.specify/memory/constitution.md`: project rules. They override everything else here.
 
-## References: AegisCore-SRO, go-sro
+## References (full ranked list with licenses: `docs/references.md`)
 https://github.com/ENGMElaraby/AegisCore-SRO is our open-source Go server for vSRO 1.188 (Gateway,
 Agent, Download). Check it first for any protocol question: opcodes, packet layouts, the security
 handshake, and the Gateway → Agent login handoff. It's Go, so port what we need to C#; no dependency
@@ -27,6 +28,10 @@ Secondary: https://github.com/ENGMElaraby/go-sro, our fork of `ferdoran/go-sro`,
 AegisCore grew from (last updated 2024-10). Use it when AegisCore lacks something or to compare an
 older take: `framework/network/`, `framework/security/` (handshake), `framework/pk2/`,
 `gateway-server/`, `agent-server/`. If the two disagree, AegisCore wins.
+
+For per-opcode field layouts, also check https://github.com/ferdoran/silkroad-docs (`docs/messages/`,
+`docs/network_protocol.md`, `docs/anticheat.md`). For the client side of the wire, read
+https://github.com/ferdoran/openroad (`packets/`), but it is GPL-3.0: never copy its code.
 
 ## Workflow: Spec-Driven Development (GitHub Spec Kit)
 Every feature goes through the spec-kit skills in `.claude/skills/`:
