@@ -1,6 +1,6 @@
 # VFilter Shared Contract (Website ⇄ Filter)
 
-**Version:** 0.3.1 (draft) · **Owner:** both repos · **Last updated:** 2026-10-17
+**Version:** 0.3.2 (draft) · **Owner:** both repos · **Last updated:** 2026-10-17
 
 The website (VFilterWebsite, Laravel) and the filter (VFilter, C#) never talk to each other directly.
 They share **one SQL Server database, `VFILTER`**, that sits next to the game databases.
@@ -76,6 +76,11 @@ The canonical key list lives in `docs/settings-catalog.md` (feature 006).
 | comment | nvarchar(256) | yes | |
 Indexes: unique `(list, value)`.
 
+List names: `allowed_ips`, `proxy_bypass_ips`, `proxy_bypass_usernames`, `blocked_ips`, `blocked_hwids`,
+`net_cafe_ips`, `blocked_words`. `allowed_ips`, `blocked_ips` and `proxy_bypass_ips` hold an IPv4/IPv6 address or a
+CIDR range in canonical form (`1.2.3.0/24`, `2001:db8::/64`); the filter matches by range. `net_cafe_ips` holds
+single addresses. Usernames, HWIDs and words compare case-insensitively.
+
 ### filter_area_rules  (area `area_rules`)
 | column | type | null | default |
 | --- | --- | --- | --- |
@@ -86,6 +91,10 @@ Indexes: unique `(list, value)`.
 | params | nvarchar(max) | yes | | JSON |
 | enabled | bit | no | 1 |
 Indexes: `(rule, enabled)`, `(area)`.
+
+`cafe_limit`: area `-1`, target = a `net_cafe_ips` address, params
+`{"login_ip","login_pc","fw_ip","fw_pc","job_ip","job_pc","fgw_ip","fgw_pc"}` as ints (0 = default cafe limit,
+-1 = unlimited, max 1000).
 
 ### filter_cooldowns  (area `cooldowns`)
 `action nvarchar(32) PK`, `seconds int not null default 0` (0–32000). Actions: `reverse`, `reverse_job`,
@@ -181,6 +190,7 @@ Their columns are defined by the website in `VFilterWebsite/specs/001-auth-and-s
 (the filter never reads them, so they are not repeated here).
 
 ## Changelog
+- 0.3.2 (2026-10-17, PATCH): list names and formats (CIDR), `cafe_limit` rule (feature 005).
 - 0.3.1 (2026-10-17, PATCH): kick/ban payload shapes (feature 004).
 - 0.3.0 (2026-10-17, MINOR): `filter_commands.status` gains `cancelled` (website, only from
   `pending`); claim/cancel rule; `download` listed as a target; `set_gateway_mode` payload shape
