@@ -1,6 +1,6 @@
 # VFilter Shared Contract (Website ⇄ Filter)
 
-**Version:** 0.3.0 (draft) · **Owner:** both repos · **Last updated:** 2026-10-17
+**Version:** 0.3.1 (draft) · **Owner:** both repos · **Last updated:** 2026-10-17
 
 The website (VFilterWebsite, Laravel) and the filter (VFilter, C#) never talk to each other directly.
 They share **one SQL Server database, `VFILTER`**, that sits next to the game databases.
@@ -119,6 +119,11 @@ status='pending'`), so a command is either run or cancelled, never both. The fil
 `cancelled` rows. The website queues at most one pending/running `start`/`stop`/`restart` per target and
 one `set_gateway_mode` at a time. `set_gateway_mode` payload: `{"mode":"gm"|"inspection"|"public"}`.
 
+**Kick and ban payloads.** `kick`: target = charname, else username, else IP; payload
+`{"session_id":123,"ip":"1.2.3.4","reason":null}`. `ban`: target = username (game account); payload
+`{"session_id":123,"reason":"...","duration_minutes":1440}` (`null` = permanent). The filter bans the account
+and disconnects it. The website queues at most one pending/running kick/ban per target.
+
 Gateway modes: `gm` (only allowed IPs; others see "Check"), `inspection` (others get inspection
 error), `public`. The filter starts in `gm` unless `server.start_in_inspection` is true.
 
@@ -176,6 +181,7 @@ Their columns are defined by the website in `VFilterWebsite/specs/001-auth-and-s
 (the filter never reads them, so they are not repeated here).
 
 ## Changelog
+- 0.3.1 (2026-10-17, PATCH): kick/ban payload shapes (feature 004).
 - 0.3.0 (2026-10-17, MINOR): `filter_commands.status` gains `cancelled` (website, only from
   `pending`); claim/cancel rule; `download` listed as a target; `set_gateway_mode` payload shape
   (feature 003).
