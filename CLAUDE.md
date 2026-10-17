@@ -11,6 +11,18 @@ the shared `VFILTER` SQL Server database.
 - `docs/maxiguard-feature-map.md`: every MaxiGuard feature we're matching.
 - `.specify/memory/constitution.md`: project rules. They override everything else here.
 
+## Reference: AegisCore-SRO
+https://github.com/ENGMElaraby/AegisCore-SRO is our open-source Go server for vSRO 1.188 (Gateway,
+Agent, Download). Check it first for any protocol question: opcodes, packet layouts, the security
+handshake, and the Gateway → Agent login handoff. It's Go, so port what we need to C#; no dependency
+on it.
+- `protocol/vsro188/`, `protocol/registry/`, `protocol/captures/`: opcodes, packet definitions, sanitized captures.
+- `framework/network/`, `framework/security/`: framing, Blowfish/handshake, packet I/O.
+- `gateway-server/`, `agent-server/`, `download-server/`: the server side of each flow we proxy.
+- `_docs/` (e.g. `vsro188-opcode-online-research.md`, `vsro188-client-decoder-layouts.md`,
+  `client-packet-tracing.md`, `sr-gameserver-*.md`): research notes on game systems.
+- `REFERENCES.md`: its own list of upstream sources.
+
 ## Workflow: Spec-Driven Development (GitHub Spec Kit)
 Every feature goes through the spec-kit skills in `.claude/skills/`:
 `/speckit-specify` → `/speckit-clarify` → `/speckit-plan` → `/speckit-tasks` → `/speckit-analyze` →
