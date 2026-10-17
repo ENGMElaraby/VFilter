@@ -202,7 +202,7 @@ it returns.
 
 - The VFILTER schema already exists, created by the website's migrations (shared contract 0.3.2). The filter never changes it.
 - Until the proxy feature lands, "starting" a module does not open a listener: the module controller reports state only. The proxy will implement the same controller interface.
-- `kick`/`ban` act on live sessions from the session registry. Ban also needs the game account ban, which is applied by the proxy/GameServer feature later. Here, ban disconnects the sessions and reports that the account ban part is pending.
+- `kick`/`ban` act on live sessions from the session registry. The game-account part of a ban needs a later feature, so here ban disconnects the sessions and reports `failed: account ban not supported yet; disconnected N session(s)`. The website must never show a ban as done when the account was not banned.
 - Command expiry (10 minutes) is filter behaviour. It is added to the shared contract as a PATCH note in both repos.
 - The filter version is the assembly's informational version.
 - Development and tests run on macOS against a local SQL Server container. Production is Windows Server.

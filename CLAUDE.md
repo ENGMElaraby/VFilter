@@ -65,9 +65,10 @@ tests/VFilter.*.Tests/
 
 ## Commands
 ```bash
+export DOTNET_ROOT=/opt/homebrew/opt/dotnet/libexec PATH=/opt/homebrew/opt/dotnet/bin:$PATH   # macOS (Homebrew .NET 10)
 dotnet build
-dotnet test
-dotnet run --project src/VFilter.Host
+dotnet test                                    # SQL Server tests run only with VFILTER_TEST_CONNECTION set
+dotnet run --project src/VFilter.Host          # needs VFilter__ConnectionString
 ```
 
 ## Conventions
@@ -79,7 +80,10 @@ dotnet run --project src/VFilter.Host
 - Every rule is pure, testable logic in `VFilter.Rules`, with input = session state + packet,
   output = allow / block (+ message).
 - Real module IP/ports are never sent to clients. Agent redirect packets are rewritten to Guard IP/Port.
-- Heartbeat every 5 s into `filter_status`.
+- Heartbeat every 5 s into `filter_status`. Every DB timestamp uses the database clock (`SYSUTCDATETIME()`).
+- Read config only from `ConfigStore` snapshots; never query config tables elsewhere.
+- Commands run only after `ICommandRepository.TryClaimAsync` succeeded (pending → running), so a cancel and a claim never both win.
+- New traffic code implements `IModuleRunner` and reports sessions through `SessionRegistry` (never DB calls on the traffic path).
 - Hot paths don't allocate per packet (use pooled buffers).
 
 ## Git
