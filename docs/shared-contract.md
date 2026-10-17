@@ -1,6 +1,6 @@
 # VFilter Shared Contract (Website ⇄ Filter)
 
-**Version:** 0.1.0 (draft) · **Owner:** both repos · **Last updated:** 2026-10-17
+**Version:** 0.1.1 (draft) · **Owner:** both repos · **Last updated:** 2026-10-17
 
 The website (VFilterWebsite, Laravel) and the filter (VFilter, C#) never talk to each other directly.
 They share **one SQL Server database, `VFILTER`**, that sits next to the game databases.
@@ -131,3 +131,9 @@ Single row: `id = 1`, `version bigint`, `updated_at`. Incremented by the website
 ### Website-only tables (also in VFILTER)
 `users` (panel admins: role `owner` \| `admin` \| `viewer`), `password_reset_tokens`, `sessions`,
 `audit_log` (who changed which setting, old → new value). Created by the website; the filter ignores them.
+Their columns are defined by the website in `VFilterWebsite/specs/001-auth-and-shell/data-model.md`
+(the filter never reads them, so they are not repeated here).
+
+## Changelog
+- 0.1.1 (2026-10-17, PATCH): website-only tables now point to their column definitions (feature 001).
+- 0.1.0 (2026-10-17): first draft.
