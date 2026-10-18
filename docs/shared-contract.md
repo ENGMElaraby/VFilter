@@ -1,9 +1,17 @@
 # VFilter Shared Contract (Website ⇄ Filter)
 
-**Version:** 0.3.3 (draft) · **Owner:** both repos · **Last updated:** 2026-10-17
+**Version:** 0.3.4 (draft) · **Owner:** both repos · **Last updated:** 2026-10-18
 
-The website (VFilterWebsite, Laravel) and the filter (VFilter, C#) never talk to each other directly.
+The website (VFilterWebsite, Laravel) and the filter never talk to each other directly.
 They share **one SQL Server database, `VFILTER`**, that sits next to the game databases.
+
+**The filter side** is whatever implements this contract. Two implementations exist:
+- **VFilter** (C#): a proxy in front of the closed vSRO binaries. Diagram below.
+- **AegisCore** (Go, `ENGMElaraby/AegisCore-SRO`, `_docs/vfilter-integration.md`): our own server implements it
+  natively. The Gateway and Agent processes write their own status, sessions and logs, and claim their own commands.
+  A `vfilter-supervisor` process claims `start`/`stop`/`restart`/`reload`.
+
+In this file "the filter" means either one. The website does not know or care which one it talks to.
 
 ```
  Players ──► VFilter (proxy) ──► GatewayServer / AgentServer / DownloadServer
@@ -25,7 +33,8 @@ table/column/setting, PATCH = wording).
 
 1. The website owns the schema. Migrations live in VFilterWebsite (`database/migrations`, connection `filter`).
 2. The filter never alters schema. It only reads config tables and writes to `filter_status`,
-   `filter_logs`, `filter_sessions`, and `filter_commands.status/result/processed_at`. The website
+   `filter_logs`, `filter_sessions`, and `filter_commands.status/result/processed_at`. Each command is claimed by
+   exactly one filter process; a filter process only claims the commands it handles. The website
    writes new `filter_commands` rows, and may change a command's `status` only from `pending` to
    `cancelled` (with `result` and `processed_at`).
 3. All times are stored in UTC (`datetime2(3)`). Text columns are `nvarchar` (Unicode). No foreign keys.
@@ -133,11 +142,23 @@ one `set_gateway_mode` at a time. `set_gateway_mode` payload: `{"mode":"gm"|"ins
 `{"session_id":123,"reason":"...","duration_minutes":1440}` (`null` = permanent). The filter bans the account
 and disconnects it. The website queues at most one pending/running kick/ban per target.
 
+**Notice payload.** `notice`: target = `all`; payload `{"message":"..."}`. The message must not
+be empty after trimming. It is sent to every in-world player as a system notice. A missing or empty message fails
+the command.
+
 **Filter behaviour.** The filter marks a command `failed` with result `expired` instead of running it when it
-claims it more than 10 minutes after `created_at` (database clock). `notice` is `failed: not supported yet` until
-the proxy can send notices; `ban` is `failed: account ban not supported yet` (after disconnecting the player) until
-the account-ban feature exists. `heartbeat_at`, `started_at`, `processed_at` and session times are written with the
-database clock (`SYSUTCDATETIME()`).
+claims it more than 10 minutes after `created_at` (database clock). `heartbeat_at`, `started_at`, `processed_at` and
+session times are written with the database clock (`SYSUTCDATETIME()`).
+
+What each implementation does today:
+
+| Command | VFilter (proxy) | AegisCore |
+| --- | --- | --- |
+| `notice` | `failed: not supported yet` | done; the result says how many players got it |
+| `ban`, permanent (`duration_minutes: null`) | disconnects, then `failed: account ban not supported yet` | account banned (`USER.STATUS = 0`) and disconnected; `failed: player not online` if no session matches |
+| `ban`, timed | as permanent | `failed: timed bans not supported yet; choose Permanent` (never silently made permanent) |
+| `start`/`stop`/`restart` | the proxy module's listener | the module's container, via the supervisor |
+| `reload` | reloads now and lists the areas | done; config already reloads within 2 s |
 
 Gateway modes: `gm` (only allowed IPs; others see "Check"), `inspection` (others get inspection
 error), `public`. The filter starts in `gm` unless `server.start_in_inspection` is true.
@@ -154,6 +175,11 @@ error), `public`. The filter starts in `gm` unless `server.start_in_inspection` 
 | started_at | datetime2(3) | yes | |
 | heartbeat_at | datetime2(3) | yes | | > 15 s old = offline |
 | last_error | nvarchar(max) | yes | |
+
+Normally each module writes its own row. A module whose process is stopped cannot, so a **supervisor** (a
+filter-side process that starts and stops modules, e.g. AegisCore's `vfilter-supervisor`) may write the row for it:
+state `stopped` (a deliberate stop) or `error` (a crash; `last_error` gives the exit reason), with a fresh
+`heartbeat_at`. The supervisor never writes a row for a module that is running.
 
 ### filter_sessions  (filter writes)
 | column | type | null |
@@ -196,6 +222,9 @@ Their columns are defined by the website in `VFilterWebsite/specs/001-auth-and-s
 (the filter never reads them, so they are not repeated here).
 
 ## Changelog
+- 0.3.4 (2026-10-18, PATCH): the filter side may be VFilter or AegisCore; one claimer per command; `notice` payload
+  `{"message"}`; per-implementation command results (AegisCore: permanent bans only); a supervisor may write
+  `filter_status` for stopped modules.
 - 0.3.3 (2026-10-17, PATCH): command expiry, interim notice/ban results, database-clock timestamps (VFilter 001).
 - 0.3.2 (2026-10-17, PATCH): list names and formats (CIDR), `cafe_limit` rule (feature 005).
 - 0.3.1 (2026-10-17, PATCH): kick/ban payload shapes (feature 004).

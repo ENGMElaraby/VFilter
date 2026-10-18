@@ -1,8 +1,17 @@
 # HANDOFF: VFilter (proxy filter)
 
-**Date:** 2026-10-17 · **Status:** **001-control-and-telemetry** and **002-proxy-core are built** (branches
-`001-control-and-telemetry`, `002-proxy-core` stacked on it). The filter is a working Silkroad proxy, controlled by the
-website. Next: confirm on the real server (see "Manual test"), then `003-security`.
+**Date:** 2026-10-18 · **Status:** **001-control-and-telemetry** and **002-proxy-core are built** and merged to
+`main`. The filter is a working Silkroad proxy, controlled by the website.
+
+## Role change (2026-10-18)
+Production runs on **AegisCore** (our Go server, `ENGMElaraby/AegisCore-SRO`). AegisCore implements the filter side
+of the contract natively: login gate, gateway modes, status, sessions, kick/ban/notice, and Start/Stop through a
+Docker supervisor. Design: `AegisCore-SRO/_docs/vfilter-integration.md`.
+
+VFilter is now the **optional edge shield**: a proxy in front of AegisCore (or any vSRO server) for checks that belong
+at the edge. Game rules (area rules, cooldowns, Game Assistant permissions) are built in AegisCore, not here. Two
+filter-side processes must never claim the same command. If VFilter runs in front of AegisCore, give it only edge
+duties (see 003 below) and leave module control, kick/ban/notice and status to AegisCore.
 
 ## What exists
 | Path | What |
@@ -15,7 +24,7 @@ website. Next: confirm on the real server (see "Manual test"), then `003-securit
 | `src/VFilter.Core/Proxy/` | Guard listeners, ProxySession (client ⇄ module), Gateway/Agent inspectors |
 | `tests/VFilter.Core.Tests/` | Unit tests with in-memory fakes |
 | `tests/VFilter.Data.Tests/` | SQL Server integration tests (`contract-schema.sql`), skipped without `VFILTER_TEST_CONNECTION` |
-| `docs/shared-contract.md` | VFILTER DB contract 0.3.3. **Must stay identical to the website's copy.** |
+| `docs/shared-contract.md` | VFILTER DB contract 0.3.4. **Must stay identical to the website's copy.** |
 | `specs/001-control-and-telemetry/` | Spec, plan, tasks (done) |
 
 ## What the website controls now does in the filter
@@ -64,7 +73,9 @@ Stop it with Ctrl+C or SIGTERM to the `VFilter` process. `dotnet run` in the bac
 
 
 ## Next features
-**003-security** (next): deny-by-default opcode whitelists per module and direction, size checks, known exploit blocks,
-flood/rate limits, blocked IPs/HWIDs (CIDR), IP/PC/cafe limits, GM login security. All as `IPacketInspector`s on the 002 pipeline, using
-the 001 config snapshots. Include the latency work (pooled buffers) here.
-**004-rules-engine** follows: area rules and cooldowns.
+**003-edge-checks** (next, only if the edge shield is wanted): deny-by-default opcode whitelists per module and
+direction, size checks, known exploit blocks, flood/rate limits, blocked IPs (CIDR) at connect. All as
+`IPacketInspector`s on the 002 pipeline, using the 001 config snapshots. Include the latency work (pooled buffers),
+which is above target today.
+Not here any more: HWID and IP/PC/cafe limits, GM login security, area rules and cooldowns. Those go into AegisCore,
+where the game state is.
