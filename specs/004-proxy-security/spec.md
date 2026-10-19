@@ -20,6 +20,13 @@ applies the gateway modes, and hides the real server addresses. It does not yet 
 MaxiGuard, which VFilter replaces, blocks all of these. This feature closes that gap. It is the core of what makes a
 filter a filter.
 
+## Clarifications
+
+### Session 2026-10-19
+
+- Q: Should the whitelist start observe-only or enforcing on a fresh install? → A: Enforcing from day one. Observe-only stays available per module as an admin switch (FR-002).
+- Q: How does VFilter know an account is a GM? → A: Both. It reads the GM flag from the game account database (read-only, refreshed every few minutes), plus a "GM accounts" list on the website for extra names (FR-014).
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Unknown and malformed packets never reach the server (Priority: P1)
@@ -177,8 +184,7 @@ packet.
 ### Edge Cases
 
 - **A legitimate packet missing from the whitelist** (for example after a client update): it is dropped and logged.
-  Admins see the packet type in the logs and can report it. A short run in observe-only mode before enforcing catches
-  these (see FR-002).
+  Admins see the packet type in the logs and can switch that module to observe-only until a VFilter fix ships (FR-002).
 - **Players behind a shared address** (a household or a carrier NAT): the address limit refuses the extra logins with a
   clear message. Admins can add the address as a Net Cafe with a higher limit.
 - **The database is down**: all protections keep working with the last good config (constitution III). The block lists
@@ -197,10 +203,8 @@ packet.
 **Packet whitelist (US1)**
 - **FR-001**: VFilter MUST forward only packet types on the allowed list for that server module (Gateway, Download,
   Agent) and direction. Every other packet is dropped.
-- **FR-002**: VFilter MUST support an observe-only mode, per module, that logs what would be dropped without dropping
-  it. [NEEDS CLARIFICATION: should a fresh install start in observe-only mode (safer for the first days with real
-  players, but no protection) or enforcing (protected from day one, but a missing legitimate packet breaks that action
-  until it's fixed)?]
+- **FR-002**: VFilter MUST enforce the whitelist by default from a fresh install. An admin can switch any module to
+  observe-only, which logs what would be dropped without dropping it (for example after a client update).
 - **FR-003**: For allowed packet types with a known shape, VFilter MUST check their size and structure, and drop
   packets that don't match.
 - **FR-004**: Each dropped packet MUST add to the session's abuse score, weighted by severity. A session whose score
@@ -230,9 +234,9 @@ packet.
 
 **GM login security (US5)**
 - **FR-014**: With "GM Login Security" on, a GM account MUST be refused at login unless it comes from an Allowed GM
-  address. [NEEDS CLARIFICATION: how does VFilter know an account is a GM? (a) read the game's account database (GM
-  flag on the account, read-only, refreshed every few minutes), (b) a "GM accounts" list that admins keep on the
-  website, (c) both]
+  address. An account is a GM when either:
+  - the game account database flags it as GM (VFilter reads this read-only and refreshes it every few minutes), or
+  - it is on the website's "GM accounts" list.
 - **FR-015**: If the GM source is unavailable, VFilter MUST keep using the last known GM list, and MUST NOT treat
   accounts as non-GM because of the outage.
 
@@ -301,6 +305,8 @@ packet.
   - 3 players per address
   - default cafe limit 10
 - Game Assistant accounts and Allowed GM addresses are the website lists from feature 005.
+- The extra "GM accounts" list is a new list name in `filter_lists` (`gm_accounts`), so the shared contract gets a PATCH
+  bump. VFilter needs a read-only login to the game account database.
 - HWID/PC-based limits, captcha, PIN, VPN/proxy detection and virtualisation blocking are out of scope. HWID needs the
   later client-side component.
 - Area rules, cooldowns and region PC/IP limits are the next feature (rules engine).

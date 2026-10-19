@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain
+- [x] No [NEEDS CLARIFICATION] markers remain
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -31,5 +31,4 @@
 
 ## Notes
 
-- Two clarifications are open: FR-002 (observe-only or enforcing on a fresh install) and FR-014 (the source of GM
-  accounts).
+- Clarified 2026-10-19: enforcing by default (FR-002); GM accounts come from the game DB plus a website list (FR-014).
